@@ -1,3 +1,4 @@
+HEAD
 # AI-Based Hand Gesture Recognition and Computer Control System
 
 Control your computer with hand gestures using just a webcam. No mouse or keyboard needed.
@@ -70,3 +71,6 @@ PyAutoGUI fail-safe is on. If the cursor goes out of control, move the mouse to 
 ## Author
 
 <Your Name>, Dept. of CSE (AIML), SCEM Mangalore
+
+# AI-Hand-gesture-control-system
+6b7b426c50b4c2b042c4cd6d252373cc612935a9
