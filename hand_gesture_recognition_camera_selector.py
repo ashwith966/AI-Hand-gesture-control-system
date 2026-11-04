@@ -162,6 +162,8 @@ class GestureApp:
         self.build_ui()
         self.show_placeholder()
 
+        
+
     # ------------------------------- GUI -------------------------------
     def build_ui(self):
         head = tk.Frame(self.root, bg=PANEL, height=70)

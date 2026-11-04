@@ -1,9 +1,9 @@
 """
-AI-Based Hand Gesture Recognition and Computer Control System  (Version 2)
+AI-Based Hand Gesture Recognition and Computer Control System  (Full Version)
 Python 3.11 | OpenCV | MediaPipe | NumPy | PyAutoGUI | Tkinter
 
-New in v2: scroll, swipe (slides), mute, right click, double click,
-control lock, mouse on/off switch, sensitivity sliders, save history to CSV.
+Features: 14 gestures, camera selector, control lock, mouse on/off switch,
+sensitivity sliders, gesture history, save history to CSV.
 """
 import csv
 import os
@@ -20,22 +20,23 @@ import pyautogui
 from PIL import Image, ImageTk
 
 pyautogui.PAUSE = 0
-pyautogui.FAILSAFE = True
+pyautogui.FAILSAFE = True    # move mouse to a screen corner to abort
 
 # ----------------------------- Configuration -----------------------------
 CAM_W, CAM_H = 640, 480
+MAX_CAMERAS_TO_SCAN = 5
 SMOOTH_WINDOW = 7
 SMOOTH_MIN_VOTES = 5
 MIN_HAND_CONF = 0.75
 FRAME_MARGIN = 100
-CLICK_HOLD_SEC = 0.5         # hold time for click / double click / right click
-LOCK_HOLD_SEC = 1.0          # hold time to lock / unlock
+CLICK_HOLD_SEC = 0.5
+LOCK_HOLD_SEC = 1.0
 ONE_SHOT_COOLDOWN = 1.5
 REPEAT_COOLDOWN = 0.35
 PINCH_MIN, PINCH_MAX = 0.15, 1.1
-SWIPE_DIST = 0.22            # fraction of frame width the hand must travel
-SWIPE_TIME = 0.5             # ...within this many seconds
-SCROLL_DEADZONE = 0.05       # small movement ignored while scrolling
+SWIPE_DIST = 0.22
+SWIPE_TIME = 0.5
+SCROLL_DEADZONE = 0.05
 SCREENSHOT_DIR = "screenshots"
 
 GESTURE_INFO = {
@@ -55,7 +56,6 @@ GESTURE_INFO = {
     "Pinky Up":      "Lock / Unlock (hold 1s)",
 }
 
-# gestures that need a short hold, then fire once
 HOLD_ACTIONS = {
     "OK Sign":      (pyautogui.click, "Mouse clicked"),
     "Middle Pinch": (pyautogui.doubleClick, "Double click"),
@@ -93,8 +93,8 @@ def classify(lm):
     thumb = thumb_extended(lm)
 
     palm = max(dist(lm[0], lm[9]), 1e-6)
-    r_idx = dist(lm[4], lm[8]) / palm     # thumb <-> index tip
-    r_mid = dist(lm[4], lm[12]) / palm    # thumb <-> middle tip
+    r_idx = dist(lm[4], lm[8]) / palm
+    r_mid = dist(lm[4], lm[12]) / palm
 
     if r_idx < 0.35 and mid and ring and pnk:
         return "OK Sign", r_idx
@@ -132,8 +132,8 @@ class GestureApp:
         self.root = root
         root.title("AI-Based Hand Gesture Recognition and Computer Control System")
         root.configure(bg=BG)
-        root.geometry("1280x820")
-        root.minsize(1150, 740)
+        root.geometry("1280x850")
+        root.minsize(1150, 760)
         root.protocol("WM_DELETE_WINDOW", self.exit_app)
 
         self.cap = None
@@ -141,6 +141,7 @@ class GestureApp:
         self.hands = None
         self.screen_w, self.screen_h = pyautogui.size()
 
+        self.camera_indices = [0]
         self.votes = deque(maxlen=SMOOTH_WINDOW)
         self.stable = "None"
         self.stable_since = time.time()
@@ -158,10 +159,27 @@ class GestureApp:
         self.log_entries = []
 
         os.makedirs(SCREENSHOT_DIR, exist_ok=True)
+        self.setup_styles()
         self.build_ui()
         self.show_placeholder()
 
     # ------------------------------- GUI -------------------------------
+    def setup_styles(self):
+        style = ttk.Style()
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        style.configure("TCombobox", fieldbackground=PANEL, background=PANEL,
+                        foreground=TEXT, arrowcolor=TEXT, bordercolor=PANEL,
+                        lightcolor=PANEL, darkcolor=PANEL)
+        style.map("TCombobox", fieldbackground=[("readonly", PANEL)],
+                  foreground=[("readonly", TEXT)])
+        self.root.option_add("*TCombobox*Listbox.background", PANEL)
+        self.root.option_add("*TCombobox*Listbox.foreground", TEXT)
+        self.root.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
+        self.root.option_add("*TCombobox*Listbox.selectForeground", BG)
+
     def build_ui(self):
         head = tk.Frame(self.root, bg=PANEL, height=70)
         head.pack(fill="x", padx=12, pady=(12, 6))
@@ -178,43 +196,24 @@ class GestureApp:
         body = tk.Frame(self.root, bg=BG)
         body.pack(fill="both", expand=True, padx=12, pady=6)
 
-        # ---- left: webcam + buttons
+        # ---- left: camera selector, webcam, buttons
         left = tk.Frame(body, bg=BG)
         left.pack(side="left", fill="both", expand=True)
-        # Camera selection panel
-        camera_frame = tk.Frame(left, bg=PANEL)
-        camera_frame.pack(fill="x", pady=(0, 8))
 
-        tk.Label(
-        camera_frame,
-        text="Select Camera:",
-        bg=PANEL,
-        fg=TEXT,
-        font=("Segoe UI", 10, "bold")
-        ).pack(side="left", padx=10, pady=8)
-
-        self.camera_var = tk.StringVar(value="0")
-
-        self.camera_combo = ttk.Combobox(
-        camera_frame,
-        textvariable=self.camera_var,
-        state="readonly",
-        width=10
-        )
+        cam_row = tk.Frame(left, bg=BG)
+        cam_row.pack(fill="x", pady=(0, 6))
+        tk.Label(cam_row, text="Camera:", bg=BG, fg=MUTED,
+                 font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 6))
+        self.camera_combo = ttk.Combobox(cam_row, state="readonly", width=24,
+                                         font=("Segoe UI", 10))
         self.camera_combo.pack(side="left", padx=5)
+        tk.Button(cam_row, text="Refresh", command=self.refresh_cameras, bg=PANEL,
+                  fg=TEXT, bd=0, font=("Segoe UI", 9, "bold"), cursor="hand2",
+                  activebackground=ACCENT, padx=10, pady=3).pack(side="left", padx=5)
 
-        tk.Button(
-        camera_frame,
-        text="Refresh Cameras",
-        command=self.refresh_cameras,
-        bg=ACCENT,
-        fg=BG,
-        bd=0
-        ).pack(side="left", padx=10)
-
-        self.refresh_cameras()
         self.video = tk.Label(left, bg="black", width=CAM_W, height=CAM_H)
         self.video.pack(pady=(0, 8))
+
         btns = tk.Frame(left, bg=BG)
         btns.pack()
         self.make_btn(btns, "Start Camera", self.start_camera, ACCENT, BG)
@@ -258,9 +257,10 @@ class GestureApp:
         sett = tk.Frame(right, bg=PANEL)
         sett.pack(fill="x", pady=(2, 6))
         self.mouse_enabled = tk.BooleanVar(value=True)
-        tk.Checkbutton(sett, text="Enable mouse control gestures", variable=self.mouse_enabled,
-                       bg=PANEL, fg=TEXT, selectcolor=BG, activebackground=PANEL,
-                       activeforeground=TEXT, font=("Segoe UI", 9)).pack(anchor="w", padx=8)
+        tk.Checkbutton(sett, text="Enable mouse control gestures",
+                       variable=self.mouse_enabled, bg=PANEL, fg=TEXT,
+                       selectcolor=BG, activebackground=PANEL, activeforeground=TEXT,
+                       font=("Segoe UI", 9)).pack(anchor="w", padx=8)
         self.cursor_speed = self.make_slider(sett, "Cursor responsiveness", 0.10, 0.60, 0.25, 0.05)
         self.scroll_speed = self.make_slider(sett, "Scroll speed", 1, 10, 5, 1)
 
@@ -275,6 +275,9 @@ class GestureApp:
                                   selectbackground=ACCENT)
         self.history.pack(fill="both", expand=True, padx=6, pady=4)
         sb.config(command=self.history.yview)
+
+        # fill the camera dropdown (must come after camera_combo exists)
+        self.refresh_cameras()
 
     def make_btn(self, parent, text, cmd, bg, fg):
         tk.Button(parent, text=text, command=cmd, bg=bg, fg=fg, bd=0, width=12,
@@ -315,12 +318,42 @@ class GestureApp:
         self.video.image = tkimg
 
     # ---------------------------- Camera control ----------------------------
+    def refresh_cameras(self):
+        """Scan camera indices and fill the dropdown."""
+        if self.running:
+            messagebox.showinfo("Cameras", "Stop the camera before refreshing the list.")
+            return
+        self.root.config(cursor="watch")
+        self.root.update_idletasks()
+        found = []
+        for i in range(MAX_CAMERAS_TO_SCAN):
+            cap = cv2.VideoCapture(i, cv2.CAP_DSHOW if os.name == "nt" else 0)
+            if cap.isOpened():
+                ok, _ = cap.read()
+                if ok:
+                    found.append(i)
+            cap.release()
+        self.root.config(cursor="")
+
+        if found:
+            self.camera_indices = found
+            self.camera_combo["values"] = [f"Camera {i}" for i in found]
+        else:
+            self.camera_indices = [0]
+            self.camera_combo["values"] = ["No camera found"]
+        self.camera_combo.current(0)
+
     def start_camera(self):
         if self.running:
             return
-        self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW if os.name == "nt" else 0)
+        sel = self.camera_combo.current()
+        cam_index = self.camera_indices[sel] if 0 <= sel < len(self.camera_indices) else 0
+        self.cap = cv2.VideoCapture(cam_index, cv2.CAP_DSHOW if os.name == "nt" else 0)
         if not self.cap.isOpened():
-            messagebox.showerror("Camera Error", "Could not open the webcam.")
+            self.cap = None
+            messagebox.showerror("Camera Error",
+                                 f"Could not open camera {cam_index}.\n"
+                                 "Close other apps using the webcam and press Refresh.")
             return
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAM_W)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAM_H)
@@ -330,7 +363,7 @@ class GestureApp:
         self.running = True
         self.votes.clear()
         self.lbl_cam.config(text="Running")
-        self.log("Camera started")
+        self.log(f"Camera {cam_index} started")
         self.loop()
 
     def stop_camera(self):
@@ -462,7 +495,7 @@ class GestureApp:
                     else:
                         self.report(g, "Already paused")
 
-        # ---- hold-to-click gestures (click, double click, right click) ----
+        # ---- hold-to-click gestures ----
         elif g in HOLD_ACTIONS:
             func, msg = HOLD_ACTIONS[g]
             if held >= CLICK_HOLD_SEC and not self.fired_for_stable:
